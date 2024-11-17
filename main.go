@@ -1,6 +1,3 @@
-// Name:			Syed Muhammad Umar
-//Student Number:	C00278724
-
 package main
 
 import (
@@ -10,6 +7,7 @@ import (
 	"math/rand"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 )
 
 // Shark and Fish colors
@@ -18,14 +16,17 @@ var (
 	fishColor  = color.RGBA{0, 0, 0, 255}   // Black
 )
 
+// Cell size is constant
+const cellSize = 7 // Each grid cell is 7x7 pixels
+
 // Game implements ebiten.Game interface.
 type Game struct {
+	gridWidth    int
+	gridHeight   int
 	screenWidth  int
 	screenHeight int
-	sharks       int
-	fishes       int
-	sharkPos     []Position // Positions of sharks
-	fishPos      []Position // Positions of fishes
+	sharks       []Position
+	fishes       []Position
 }
 
 // Position represents the x, y coordinates of an entity
@@ -37,7 +38,7 @@ type Position struct {
 // Update proceeds the game state.
 // Update is called every tick (1/60 [s] by default).
 func (g *Game) Update() error {
-	// Update logic can be added here (e.g., move sharks and fishes)
+	// Future movement logic can go here
 	return nil
 }
 
@@ -48,70 +49,83 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	skyBlue := color.RGBA{135, 206, 235, 255}
 	screen.Fill(skyBlue)
 
-	// Draw sharks
-	for _, pos := range g.sharkPos {
-		screen.Set(pos.x, pos.y, sharkColor)
+	// Draw grid lines
+	for i := 0; i <= g.gridWidth; i++ {
+		x := i * cellSize
+		ebitenutil.DrawLine(screen, float64(x), 0, float64(x), float64(g.screenHeight), color.Black)
+	}
+	for i := 0; i <= g.gridHeight; i++ {
+		y := i * cellSize
+		ebitenutil.DrawLine(screen, 0, float64(y), float64(g.screenWidth), float64(y), color.Black)
 	}
 
-	// Draw fishes
-	for _, pos := range g.fishPos {
-		screen.Set(pos.x, pos.y, fishColor)
+	// Draw sharks as red filled cells
+	for _, pos := range g.sharks {
+		ebitenutil.DrawRect(screen, float64(pos.x*cellSize), float64(pos.y*cellSize), float64(cellSize), float64(cellSize), sharkColor)
+	}
+
+	// Draw fishes as black filled cells
+	for _, pos := range g.fishes {
+		ebitenutil.DrawRect(screen, float64(pos.x*cellSize), float64(pos.y*cellSize), float64(cellSize), float64(cellSize), fishColor)
 	}
 }
 
 // Layout takes the outside size (e.g., the window size) and returns the (logical) screen size.
-// Return fixed screen dimensions, ensuring they are positive.
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return g.screenWidth, g.screenHeight
 }
 
-// generatePositions generates random positions for entities
-func generatePositions(count, width, height int) []Position {
+// generatePositions generates random positions for entities within the grid
+func generatePositions(count, gridWidth, gridHeight int) []Position {
 	positions := make([]Position, count)
 	for i := 0; i < count; i++ {
 		positions[i] = Position{
-			x: rand.Intn(width),  // Random X position within screen width
-			y: rand.Intn(height), // Random Y position within screen height
+			x: rand.Intn(gridWidth),  // Random X position within grid width
+			y: rand.Intn(gridHeight), // Random Y position within grid height
 		}
 	}
 	return positions
 }
 
 func main() {
-	var screenWidth, screenHeight, sharks, fishes int
+	var gridWidth, gridHeight, sharksCount, fishesCount int
 
-	// Input dimensions and entity counts
-	fmt.Println("Please enter screen dimensions")
-	fmt.Print("Width:  ")
-	fmt.Scan(&screenWidth)
-	fmt.Print("Height: ")
-	fmt.Scan(&screenHeight)
+	// Input grid dimensions and entity counts
+	fmt.Println("Enter the number of grid cells (width and height):")
+	fmt.Print("Grid Width:  ")
+	fmt.Scan(&gridWidth)
+	fmt.Print("Grid Height: ")
+	fmt.Scan(&gridHeight)
 
-	fmt.Println("Please enter number of sharks and fishes")
+	fmt.Println("Enter the number of sharks and fishes:")
 	fmt.Print("Sharks: ")
-	fmt.Scan(&sharks)
+	fmt.Scan(&sharksCount)
 	fmt.Print("Fishes: ")
-	fmt.Scan(&fishes)
+	fmt.Scan(&fishesCount)
 
-	if screenWidth <= 0 || screenHeight <= 0 || sharks < 0 || fishes < 0 {
-		log.Fatal("Invalid input: screen dimensions and entity counts must be positive")
+	// Calculate screen dimensions
+	screenWidth := gridWidth * cellSize
+	screenHeight := gridHeight * cellSize
+
+	if gridWidth <= 0 || gridHeight <= 0 || sharksCount < 0 || fishesCount < 0 {
+		log.Fatal("Invalid input: all values must be positive integers")
 	}
 
 	// Initialize game
 	game := &Game{
+		gridWidth:    gridWidth,
+		gridHeight:   gridHeight,
 		screenWidth:  screenWidth,
 		screenHeight: screenHeight,
-		sharks:       sharks,
-		fishes:       fishes,
-		sharkPos:     generatePositions(sharks, screenWidth, screenHeight),
-		fishPos:      generatePositions(fishes, screenWidth, screenHeight),
+		sharks:       generatePositions(sharksCount, gridWidth, gridHeight),
+		fishes:       generatePositions(fishesCount, gridWidth, gridHeight),
 	}
 
 	// Set the window size to match the screen dimensions
 	ebiten.SetWindowSize(screenWidth, screenHeight)
-	ebiten.SetWindowTitle("Wa-Tor Simulation")
+	ebiten.SetWindowTitle("Wa-Tor Simulation (Grid-Based)")
 
-	// Call ebiten.RunGame to start your game loop.
+	// Start the game loop
 	if err := ebiten.RunGame(game); err != nil {
 		log.Fatal(err)
 	}
