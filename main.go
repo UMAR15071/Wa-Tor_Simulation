@@ -50,14 +50,12 @@ type Game struct {
 	routinesCount int
 }
 
-// Update proceeds the game state.
-// Update is called every tick (1/60 [s] by default).
 func (g *Game) Update() error {
 	now := time.Now()
 	if now.Sub(g.lastUpdate).Seconds() >= chrononDuration {
-		// Update sharks and fishes using multiple goroutines
-		g.sharks = updateEntitiesParallel(g.sharks, g.gridWidth, g.gridHeight, g.routinesCount)
-		g.fishes = updateEntitiesParallel(g.fishes, g.gridWidth, g.gridHeight, g.routinesCount)
+		// Update sharks and fishes using the new logic
+		g.sharks = updateEntitiesParallel(g.sharks, g.fishes, g.gridWidth, g.gridHeight, g.routinesCount)
+		g.fishes = updateEntitiesParallel(g.fishes, g.sharks, g.gridWidth, g.gridHeight, g.routinesCount)
 
 		// Reset the last update time
 		g.lastUpdate = now
@@ -66,9 +64,18 @@ func (g *Game) Update() error {
 }
 
 // updateEntitiesParallel updates entities in parallel using the specified number of routines
-func updateEntitiesParallel(entities []Position, gridWidth, gridHeight, routinesCount int) []Position {
-	chunkSize := (len(entities) + routinesCount - 1) / routinesCount // Divide work into chunks
+func updateEntitiesParallel(entities, otherEntities []Position, gridWidth, gridHeight, routinesCount int) []Position {
+	chunkSize := (len(entities) + routinesCount - 1) / routinesCount
 	results := make(chan []Position, routinesCount)
+
+	// Create a grid to track occupied cells
+	grid := make(map[Position]bool)
+	for _, e := range entities {
+		grid[e] = true
+	}
+	for _, e := range otherEntities {
+		grid[e] = true
+	}
 
 	var wg sync.WaitGroup
 
@@ -82,14 +89,13 @@ func updateEntitiesParallel(entities []Position, gridWidth, gridHeight, routines
 		wg.Add(1)
 		go func(subEntities []Position) {
 			defer wg.Done()
-			results <- moveEntities(subEntities, gridWidth, gridHeight)
+			results <- moveEntities(subEntities, grid, gridWidth, gridHeight)
 		}(entities[start:end])
 	}
 
 	wg.Wait()
 	close(results)
 
-	// Collect results from all routines
 	updatedEntities := make([]Position, 0, len(entities))
 	for res := range results {
 		updatedEntities = append(updatedEntities, res...)
@@ -98,19 +104,36 @@ func updateEntitiesParallel(entities []Position, gridWidth, gridHeight, routines
 	return updatedEntities
 }
 
-// moveEntities moves each entity randomly within the grid
-func moveEntities(entities []Position, gridWidth, gridHeight int) []Position {
+// Add a mutex
+var gridMutex sync.Mutex
+
+func moveEntities(entities []Position, grid map[Position]bool, gridWidth, gridHeight int) []Position {
 	for i, pos := range entities {
-		// Choose a random direction
-		dir := directions[rand.Intn(len(directions))]
+		// Shuffle directions for random movement
+		rand.Shuffle(len(directions), func(i, j int) { directions[i], directions[j] = directions[j], directions[i] })
 
-		// Calculate new position
-		newX := pos.x + dir.x
-		newY := pos.y + dir.y
+		// Attempt to move to an empty adjacent cell
+		for _, dir := range directions {
+			newX := pos.x + dir.x
+			newY := pos.y + dir.y
+			newPos := Position{x: newX, y: newY}
 
-		// Check boundaries and update position if valid
-		if newX >= 0 && newX < gridWidth && newY >= 0 && newY < gridHeight {
-			entities[i] = Position{x: newX, y: newY}
+			// Lock grid access
+			gridMutex.Lock()
+			isEmpty := newX >= 0 && newX < gridWidth && newY >= 0 && newY < gridHeight && !grid[newPos]
+			if isEmpty {
+				// Mark current cell as empty and new cell as occupied
+				delete(grid, pos)
+				grid[newPos] = true
+
+				// Move entity
+				entities[i] = newPos
+			}
+			gridMutex.Unlock()
+
+			if isEmpty {
+				break
+			}
 		}
 	}
 	return entities
