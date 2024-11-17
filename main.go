@@ -5,6 +5,8 @@ import (
 	"image/color"
 	"log"
 	"math/rand"
+	"sync"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
@@ -17,16 +19,17 @@ var (
 )
 
 // Cell size is constant
-const cellSize = 7 // Each grid cell is 7x7 pixels
+const cellSize = 7
 
-// Game implements ebiten.Game interface.
-type Game struct {
-	gridWidth    int
-	gridHeight   int
-	screenWidth  int
-	screenHeight int
-	sharks       []Position
-	fishes       []Position
+// Chronon duration (in seconds)
+const chrononDuration = 0.1
+
+// Directions for movement
+var directions = []Position{
+	{x: 0, y: -1}, // Up
+	{x: 0, y: 1},  // Down
+	{x: -1, y: 0}, // Left
+	{x: 1, y: 0},  // Right
 }
 
 // Position represents the x, y coordinates of an entity
@@ -35,11 +38,82 @@ type Position struct {
 	y int
 }
 
+// Game implements ebiten.Game interface.
+type Game struct {
+	gridWidth     int
+	gridHeight    int
+	screenWidth   int
+	screenHeight  int
+	sharks        []Position
+	fishes        []Position
+	lastUpdate    time.Time
+	routinesCount int
+}
+
 // Update proceeds the game state.
 // Update is called every tick (1/60 [s] by default).
 func (g *Game) Update() error {
-	// Future movement logic can go here
+	now := time.Now()
+	if now.Sub(g.lastUpdate).Seconds() >= chrononDuration {
+		// Update sharks and fishes using multiple goroutines
+		g.sharks = updateEntitiesParallel(g.sharks, g.gridWidth, g.gridHeight, g.routinesCount)
+		g.fishes = updateEntitiesParallel(g.fishes, g.gridWidth, g.gridHeight, g.routinesCount)
+
+		// Reset the last update time
+		g.lastUpdate = now
+	}
 	return nil
+}
+
+// updateEntitiesParallel updates entities in parallel using the specified number of routines
+func updateEntitiesParallel(entities []Position, gridWidth, gridHeight, routinesCount int) []Position {
+	chunkSize := (len(entities) + routinesCount - 1) / routinesCount // Divide work into chunks
+	results := make(chan []Position, routinesCount)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < routinesCount; i++ {
+		start := i * chunkSize
+		end := start + chunkSize
+		if end > len(entities) {
+			end = len(entities)
+		}
+
+		wg.Add(1)
+		go func(subEntities []Position) {
+			defer wg.Done()
+			results <- moveEntities(subEntities, gridWidth, gridHeight)
+		}(entities[start:end])
+	}
+
+	wg.Wait()
+	close(results)
+
+	// Collect results from all routines
+	updatedEntities := make([]Position, 0, len(entities))
+	for res := range results {
+		updatedEntities = append(updatedEntities, res...)
+	}
+
+	return updatedEntities
+}
+
+// moveEntities moves each entity randomly within the grid
+func moveEntities(entities []Position, gridWidth, gridHeight int) []Position {
+	for i, pos := range entities {
+		// Choose a random direction
+		dir := directions[rand.Intn(len(directions))]
+
+		// Calculate new position
+		newX := pos.x + dir.x
+		newY := pos.y + dir.y
+
+		// Check boundaries and update position if valid
+		if newX >= 0 && newX < gridWidth && newY >= 0 && newY < gridHeight {
+			entities[i] = Position{x: newX, y: newY}
+		}
+	}
+	return entities
 }
 
 // Draw draws the game screen.
@@ -88,7 +162,10 @@ func generatePositions(count, gridWidth, gridHeight int) []Position {
 }
 
 func main() {
-	var gridWidth, gridHeight, sharksCount, fishesCount int
+	var gridWidth, gridHeight, sharksCount, fishesCount, routinesCount int
+
+	// Seed the random number generator
+	rand.Seed(time.Now().UnixNano())
 
 	// Input grid dimensions and entity counts
 	fmt.Println("Enter the number of grid cells (width and height):")
@@ -103,27 +180,33 @@ func main() {
 	fmt.Print("Fishes: ")
 	fmt.Scan(&fishesCount)
 
+	fmt.Println("Enter the number of routines:")
+	fmt.Print("Routines: ")
+	fmt.Scan(&routinesCount)
+
 	// Calculate screen dimensions
 	screenWidth := gridWidth * cellSize
 	screenHeight := gridHeight * cellSize
 
-	if gridWidth <= 0 || gridHeight <= 0 || sharksCount < 0 || fishesCount < 0 {
+	if gridWidth <= 0 || gridHeight <= 0 || sharksCount < 0 || fishesCount < 0 || routinesCount <= 0 {
 		log.Fatal("Invalid input: all values must be positive integers")
 	}
 
 	// Initialize game
 	game := &Game{
-		gridWidth:    gridWidth,
-		gridHeight:   gridHeight,
-		screenWidth:  screenWidth,
-		screenHeight: screenHeight,
-		sharks:       generatePositions(sharksCount, gridWidth, gridHeight),
-		fishes:       generatePositions(fishesCount, gridWidth, gridHeight),
+		gridWidth:     gridWidth,
+		gridHeight:    gridHeight,
+		screenWidth:   screenWidth,
+		screenHeight:  screenHeight,
+		sharks:        generatePositions(sharksCount, gridWidth, gridHeight),
+		fishes:        generatePositions(fishesCount, gridWidth, gridHeight),
+		lastUpdate:    time.Now(),
+		routinesCount: routinesCount,
 	}
 
 	// Set the window size to match the screen dimensions
 	ebiten.SetWindowSize(screenWidth, screenHeight)
-	ebiten.SetWindowTitle("Wa-Tor Simulation (Grid-Based)")
+	ebiten.SetWindowTitle("Wa-Tor Simulation (Multi-threaded)")
 
 	// Start the game loop
 	if err := ebiten.RunGame(game); err != nil {
