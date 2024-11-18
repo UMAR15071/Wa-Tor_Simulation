@@ -1,14 +1,15 @@
-// package main
+package main
+
 import (
 	"fmt"
 	"image/color"
 	"log"
-	"math/rand"
 	"sync"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"golang.org/x/exp/rand"
 )
 
 // Shark and Fish colors
@@ -20,8 +21,16 @@ var (
 // Cell size is constant
 const cellSize = 7
 
-// Chronon duration (in seconds)
-const chrononDuration = 0.25
+// Add a mutex
+var gridMutex sync.Mutex
+
+const chrononDuration = 0.1
+
+// Position represents the x, y coordinates of an entity
+type Position struct {
+	x int
+	y int
+}
 
 // Directions for movement
 var directions = []Position{
@@ -29,12 +38,6 @@ var directions = []Position{
 	{x: 0, y: 1},  // Down
 	{x: -1, y: 0}, // Left
 	{x: 1, y: 0},  // Right
-}
-
-// Position represents the x, y coordinates of an entity
-type Position struct {
-	x int
-	y int
 }
 
 // Game implements ebiten.Game interface.
@@ -71,14 +74,15 @@ func updateEntitiesParallel(entities, otherEntities []Position, gridWidth, gridH
 	// Create a grid to track occupied cells
 	grid := make(map[Position]string)
 
-	// Add entities to the grid with their type (sharks or fishes)
-	if entityType == "Shark" {
-		for _, e := range entities {
-			grid[e] = "Shark"
-		}
-	} else if entityType == "Fish" {
-		for _, e := range otherEntities {
+	// Populate the grid with all current entities
+	for _, e := range entities {
+		grid[e] = entityType
+	}
+	for _, e := range otherEntities {
+		if entityType == "Shark" {
 			grid[e] = "Fish"
+		} else {
+			grid[e] = "Shark"
 		}
 	}
 
@@ -111,51 +115,80 @@ func updateEntitiesParallel(entities, otherEntities []Position, gridWidth, gridH
 	return updatedEntities
 }
 
-// Add a mutex
-var gridMutex sync.Mutex
+func moveEntities(entities []Position, grid map[Position]string, gridWidth, gridHeight int) []Position {
+	// New slice to store entities after movement
+	var newEntities []Position
 
-func moveEntities(entities []Position, grid map[Position]bool, gridWidth, gridHeight int) []Position {
-	newEntities := []Position{} // To store newly created entities (fishes from reproduction)
-
+	// Iterate over each entity
 	for i, pos := range entities {
 		// Shuffle directions for random movement
 		rand.Shuffle(len(directions), func(i, j int) { directions[i], directions[j] = directions[j], directions[i] })
 
-		// Attempt to move to an empty adjacent cell
+		// Try moving in shuffled directions
 		for _, dir := range directions {
+			// Calculate new position with wrap-around logic
 			newX := (pos.x + dir.x + gridWidth) % gridWidth   // Wrap around horizontally
 			newY := (pos.y + dir.y + gridHeight) % gridHeight // Wrap around vertically
 			newPos := Position{x: newX, y: newY}
 
-			// Lock grid access
+			// Lock grid access to ensure thread-safety
 			gridMutex.Lock()
-			isEmpty := !grid[newPos]
-			if isEmpty {
-				// Mark current cell as empty and new cell as occupied
-				delete(grid, pos)
-				grid[newPos] = true
 
-				// Reproduce: Add the previous position as a new entity
+			// Assume the cell is empty until proven otherwise
+			isEmpty := true
+
+			// Check if the new position is occupied by a shark or fish
+			if grid[newPos] == "Shark" || grid[newPos] == "Fish" {
+				isEmpty = false
+			}
+
+			// If the new position is empty, move the entity
+			if isEmpty {
+				// Mark current position as empty
+				delete(grid, pos)
+
+				// Mark new position as occupied (depending on the entity type)
+				if grid[pos] == "Shark" {
+					grid[newPos] = "Shark"
+				} else if grid[pos] == "Fish" {
+					grid[newPos] = "Fish"
+				}
+
+				// Reproduce: Add the previous position as a new entity if needed
 				newEntities = append(newEntities, pos)
 
-				// Move entity
+				// Move the entity
 				entities[i] = newPos
 			}
+
+			// Unlock grid after updating
 			gridMutex.Unlock()
 
+			// If the new position is empty, break out of the loop as no further movement needed
 			if isEmpty {
 				break
 			}
 		}
 	}
 
-	// Add all newly created entities to the main list
-	entities = append(entities, newEntities...)
+	// Return the updated list of entities
 	return entities
 }
 
+// Method to generate initial position of sharks and fishes
+func generatePositions(count, gridWidth, gridHeight int) []Position {
+	positions := make([]Position, count)
+	for i := 0; i < count; i++ {
+		positions[i] = Position{
+			x: rand.Intn(gridWidth),  // Random X position within grid width
+			y: rand.Intn(gridHeight), // Random Y position within grid height
+		}
+	}
+	return positions
+}
+
+// Draw method is necessary because Ebiten interface requires it to be implemented.
 // Draw draws the game screen.
-// Draw is called every frame (typically 1/60[s] for 60Hz display).
 func (g *Game) Draw(screen *ebiten.Image) {
 	// Set the background color to sky blue
 	skyBlue := color.RGBA{135, 206, 235, 255}
@@ -187,39 +220,19 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return g.screenWidth, g.screenHeight
 }
 
-// generatePositions generates random positions for entities within the grid
-func generatePositions(count, gridWidth, gridHeight int) []Position {
-	positions := make([]Position, count)
-	for i := 0; i < count; i++ {
-		positions[i] = Position{
-			x: rand.Intn(gridWidth),  // Random X position within grid width
-			y: rand.Intn(gridHeight), // Random Y position within grid height
-		}
-	}
-	return positions
-}
-
 func main() {
 	var gridWidth, gridHeight, sharksCount, fishesCount, routinesCount int
 
-	// Seed the random number generator
-	rand.Seed(time.Now().UnixNano())
-
 	// Input grid dimensions and entity counts
-	fmt.Println("Enter the number of grid cells (width and height):")
-	fmt.Print("Grid Width:  ")
+	fmt.Print("Enter grid width: ")
 	fmt.Scan(&gridWidth)
-	fmt.Print("Grid Height: ")
+	fmt.Print("Enter grid height: ")
 	fmt.Scan(&gridHeight)
-
-	fmt.Println("Enter the number of sharks and fishes:")
-	fmt.Print("Sharks: ")
+	fmt.Print("Enter number of sharks: ")
 	fmt.Scan(&sharksCount)
-	fmt.Print("Fishes: ")
+	fmt.Print("Enter number of fishes: ")
 	fmt.Scan(&fishesCount)
-
-	fmt.Println("Enter the number of routines:")
-	fmt.Print("Routines: ")
+	fmt.Print("Enter number of goroutines: ")
 	fmt.Scan(&routinesCount)
 
 	// Calculate screen dimensions
@@ -230,7 +243,7 @@ func main() {
 		log.Fatal("Invalid input: all values must be positive integers")
 	}
 
-	// Initialize game
+	// Create a new game
 	game := &Game{
 		gridWidth:     gridWidth,
 		gridHeight:    gridHeight,
@@ -238,15 +251,12 @@ func main() {
 		screenHeight:  screenHeight,
 		sharks:        generatePositions(sharksCount, gridWidth, gridHeight),
 		fishes:        generatePositions(fishesCount, gridWidth, gridHeight),
-		lastUpdate:    time.Now(),
 		routinesCount: routinesCount,
 	}
-
-	// Set the window size to match the screen dimensions
 	ebiten.SetWindowSize(screenWidth, screenHeight)
 	ebiten.SetWindowTitle("Wa-Tor Simulation (Multi-threaded)")
 
-	// Start the game loop
+	// Run the game
 	if err := ebiten.RunGame(game); err != nil {
 		log.Fatal(err)
 	}
