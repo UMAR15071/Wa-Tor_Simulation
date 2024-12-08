@@ -63,159 +63,125 @@ func (g *Game) Update() error {
 	return nil
 }
 func Chronon(c int, g *Game) {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-
-	var xcoord, ycoord int
-
 	for y := 0; y < g.gridHeight; y++ {
 		for x := 0; x < g.gridWidth; x++ {
-			north, south, east, west := adjacent(x, y, g)
-
-			if wm[x][y] == nil {
+			if wm[x][y] == nil || wm[x][y].chronon == c {
 				continue
 			}
 
-			if wm[x][y].chronon == c {
-				continue
-			}
-			wm[x][y].age += 1
-			d := r.Intn(3)
-			switch wm[x][y].species {
-			case FISH:
-				foundspace := false
-				wm[x][y].chronon = c
-				for i := 0; i < 4; i++ {
-					d += i
+			wm[x][y].chronon = c // Mark creature as processed
+			wm[x][y].age++       // Increment age
 
-					switch d % 4 {
-					case NORTH:
-						xcoord, ycoord = north.x, north.y
-					case SOUTH:
-						xcoord, ycoord = south.x, south.y
-					case EAST:
-						xcoord, ycoord = east.x, east.y
-					case WEST:
-						xcoord, ycoord = west.x, west.y
-					}
-
-					// Check bounds
-					if wm[xcoord][ycoord] == nil {
-						wm[xcoord][ycoord] = wm[x][y]
-						wm[xcoord][ycoord].age = 0 // New fish
-						foundspace = true
-						break
-					}
+			if wm[x][y].species == FISH {
+				if wm[x][y].age%g.fbreed == 0 { // Fish reproduces
+					spawnFish(x, y, c, g)
+				} else {
+					moveCreature(wm[x][y], x, y, g, false)
 				}
-				if !foundspace {
-					wm[x][y] = nil
-				}
+			} else if wm[x][y].species == SHARK {
+				wm[x][y].health-- // Shark gets hungrier
 
-			case SHARK:
-				foundfish := false
-				wm[x][y].chronon = c
-
-				// Sharks get hungrier each turn
-				wm[x][y].health--
 				if wm[x][y].health <= 0 {
-					wm[x][y] = nil // Shark starves to death
-					break
-				}
-
-				for i := 0; i < 4; i++ {
-					d += i
-					switch d % 4 {
-					case NORTH:
-						xcoord, ycoord = north.x, north.y
-					case SOUTH:
-						xcoord, ycoord = south.x, south.y
-					case EAST:
-						xcoord, ycoord = east.x, east.y
-					case WEST:
-						xcoord, ycoord = west.x, west.y
-					}
-
-					// Check bounds
-					if wm[xcoord][ycoord] == nil {
-						continue
-					}
-
-					// Found fish to eat
-					if wm[xcoord][ycoord].species == FISH {
-						foundfish = true
-						wm[xcoord][ycoord] = wm[x][y]
-						wm[xcoord][ycoord].health = g.starve
-						wm[x][y] = nil
-						break
-					}
-				}
-
-				if !foundfish {
-					// No fish found, move to empty space
-					for i := 0; i < 4; i++ {
-						d += i
-						switch d % 4 {
-						case NORTH:
-							xcoord, ycoord = north.x, north.y
-						case SOUTH:
-							xcoord, ycoord = south.x, south.y
-						case EAST:
-							xcoord, ycoord = east.x, east.y
-						case WEST:
-							xcoord, ycoord = west.x, west.y
-						}
-
-						if wm[xcoord][ycoord] == nil {
-							wm[xcoord][ycoord] = wm[x][y]
-							wm[x][y] = nil
-
-							// Check if shark can reproduce
-							if wm[xcoord][ycoord].age > 0 && wm[xcoord][ycoord].age%g.sBreed == 0 {
-								wm[x][y] = &creature{
-									age:     0,
-									health:  g.starve,
-									species: SHARK,
-									asset:   sharkColor,
-									chronon: c,
-								}
-							}
-							break
-						}
-					}
+					wm[x][y] = nil // Shark dies
+				} else if wm[x][y].age%g.sBreed == 0 { // Shark reproduces
+					spawnShark(x, y, c, g)
+				} else {
+					moveCreature(wm[x][y], x, y, g, true)
 				}
 			}
 		}
 	}
 }
+func moveCreature(c *creature, x, y int, g *Game, isShark bool) bool {
+	start := coordinate{x, y}
+	directions := shuffledDirections()
+
+	// Sharks prioritize finding fish
+	if isShark {
+		n, s, e, w := adjacent(x, y, g)
+		neighbors := []coordinate{n, s, e, w}
+
+		for _, dir := range directions {
+			target := neighbors[dir]
+			if wm[target.x][target.y] != nil && wm[target.x][target.y].species == FISH {
+				// Shark eats the fish
+				wm[target.x][target.y] = c
+				wm[x][y] = nil
+				c.health = g.starve // Reset shark's health
+				return true
+			}
+		}
+	}
+
+	// Move to an empty space
+	if target := findAvailableSpace(start, directions, g); target != nil {
+		wm[target.x][target.y] = c
+		wm[x][y] = nil
+		return true
+	}
+
+	return false // No valid move found
+}
+
+func spawnFish(x, y, c int, g *Game) {
+	start := coordinate{x, y}
+	directions := shuffledDirections()
+
+	if target := findAvailableSpace(start, directions, g); target != nil {
+		wm[target.x][target.y] = &creature{
+			age:     0,
+			health:  0,
+			species: FISH,
+			asset:   fishColor,
+			chronon: c,
+		}
+	}
+}
+
+func spawnShark(x, y, c int, g *Game) {
+	start := coordinate{x, y}
+	directions := shuffledDirections()
+
+	if target := findAvailableSpace(start, directions, g); target != nil {
+		wm[target.x][target.y] = &creature{
+			age:     0,
+			health:  g.starve,
+			species: SHARK,
+			asset:   sharkColor,
+			chronon: c,
+		}
+	}
+}
+
+func shuffledDirections() []int {
+	directions := []int{NORTH, SOUTH, EAST, WEST}
+	rand.Shuffle(len(directions), func(i, j int) {
+		directions[i], directions[j] = directions[j], directions[i]
+	})
+	return directions
+}
 
 func adjacent(x, y int, g *Game) (coordinate, coordinate, coordinate, coordinate) {
+	height, width := g.gridHeight, g.gridWidth
 
-	var n, s, e, w coordinate
-	if y == 0 {
-		n.y = *&g.gridHeight - 1
-	} else {
-		n.y = y - 1
-	}
-	n.x = x
-	if y == *&g.gridHeight-1 {
-		s.y = 0
-	} else {
-		s.y = y + 1
-	}
-	s.x = x
-	if x == *&g.gridWidth-1 {
-		e.x = 0
-	} else {
-		e.x = x + 1
-	}
-	e.y = y
-	if x == 0 {
-		w.x = *&g.gridWidth - 1
-	} else {
-		w.x = x - 1
-	}
-	w.y = y
+	n := coordinate{x, (y + height - 1) % height} // North
+	s := coordinate{x, (y + 1) % height}          // South
+	e := coordinate{(x + 1) % width, y}           // East
+	w := coordinate{(x + width - 1) % width, y}   // West
 
 	return n, s, e, w
+}
+func findAvailableSpace(start coordinate, directions []int, g *Game) *coordinate {
+	n, s, e, w := adjacent(start.x, start.y, g)
+	neighbors := []coordinate{n, s, e, w}
+
+	for _, dir := range directions {
+		target := neighbors[dir]
+		if wm[target.x][target.y] == nil { // Check if space is empty
+			return &target
+		}
+	}
+	return nil
 }
 
 func initWator(game *Game) {
@@ -322,9 +288,9 @@ func main() {
 		screenHeight: screenHeight,
 		fishesCount:  fishesCount,
 		sharksCount:  sharksCount,
-		fbreed:       50,
-		sBreed:       200,
-		starve:       100,
+		fbreed:       100,
+		sBreed:       150,
+		starve:       150,
 		routines:     routines,
 	}
 
