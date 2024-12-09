@@ -1,3 +1,6 @@
+// Name:			Syed Muhammad Umar
+//Student number: 	C00278724
+
 package main
 
 import (
@@ -74,7 +77,9 @@ func Chronon(c int, g *Game) {
 
 			if wm[x][y].species == FISH {
 				if wm[x][y].age%g.fbreed == 0 { // Fish reproduces
-					spawnFish(x, y, c, g)
+					if spawnFish(x, y, c, g) { // Only increment count if reproduction succeeds
+						g.fishesCount++
+					}
 				} else {
 					moveCreature(wm[x][y], x, y, g, false)
 				}
@@ -82,16 +87,21 @@ func Chronon(c int, g *Game) {
 				wm[x][y].health-- // Shark gets hungrier
 
 				if wm[x][y].health <= 0 {
-					wm[x][y] = nil // Shark dies
+					wm[x][y] = nil  // Shark dies
+					g.sharksCount-- // Decrease shark count
 				} else if wm[x][y].age%g.sBreed == 0 { // Shark reproduces
 					spawnShark(x, y, c, g)
+					g.sharksCount++
 				} else {
-					moveCreature(wm[x][y], x, y, g, true)
+					if moveCreature(wm[x][y], x, y, g, true) {
+						g.fishesCount-- // Only decrement fish count if a fish is eaten
+					}
 				}
 			}
 		}
 	}
 }
+
 func moveCreature(c *creature, x, y int, g *Game, isShark bool) bool {
 	start := coordinate{x, y}
 	directions := shuffledDirections()
@@ -108,7 +118,7 @@ func moveCreature(c *creature, x, y int, g *Game, isShark bool) bool {
 				wm[target.x][target.y] = c
 				wm[x][y] = nil
 				c.health = g.starve // Reset shark's health
-				return true
+				return true         // Indicates a fish was eaten
 			}
 		}
 	}
@@ -117,13 +127,13 @@ func moveCreature(c *creature, x, y int, g *Game, isShark bool) bool {
 	if target := findAvailableSpace(start, directions, g); target != nil {
 		wm[target.x][target.y] = c
 		wm[x][y] = nil
-		return true
+		return false // No fish was eaten, just movement
 	}
 
 	return false // No valid move found
 }
 
-func spawnFish(x, y, c int, g *Game) {
+func spawnFish(x, y, c int, g *Game) bool {
 	start := coordinate{x, y}
 	directions := shuffledDirections()
 
@@ -135,7 +145,9 @@ func spawnFish(x, y, c int, g *Game) {
 			asset:   fishColor,
 			chronon: c,
 		}
+		return true
 	}
+	return false
 }
 
 func spawnShark(x, y, c int, g *Game) {
@@ -164,10 +176,10 @@ func shuffledDirections() []int {
 func adjacent(x, y int, g *Game) (coordinate, coordinate, coordinate, coordinate) {
 	height, width := g.gridHeight, g.gridWidth
 
-	n := coordinate{x, (y + height - 1) % height} // North
-	s := coordinate{x, (y + 1) % height}          // South
-	e := coordinate{(x + 1) % width, y}           // East
-	w := coordinate{(x + width - 1) % width, y}   // West
+	n := coordinate{x, (y + height - 1) % height}
+	s := coordinate{x, (y + 1) % height}
+	e := coordinate{(x + 1) % width, y}
+	w := coordinate{(x + width - 1) % width, y}
 
 	return n, s, e, w
 }
@@ -232,7 +244,6 @@ func initWator(game *Game) {
 		}
 	}
 }
-
 func (g *Game) Draw(screen *ebiten.Image) {
 	// Set background
 	screen.Fill(skyBlue)
@@ -248,8 +259,41 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 
-	// Debug display
-	ebitenutil.DebugPrint(screen, "Tick: "+strconv.Itoa(tick))
+	// Display simulation stats as text
+	info := "Tick: " + strconv.Itoa(tick) + "\n" +
+		"Sharks: " + strconv.Itoa(g.sharksCount) + "\n" +
+		"Fish: " + strconv.Itoa(g.fishesCount)
+	ebitenutil.DebugPrint(screen, info)
+
+	// Draw the graph panel
+	panelWidth := 200
+	panelHeight := g.screenHeight
+	panelOffsetX := g.screenWidth - panelWidth
+	ebitenutil.DrawRect(screen, float64(panelOffsetX), 0, float64(panelWidth), float64(panelHeight), color.RGBA{R: 200, G: 200, B: 200, A: 255})
+
+	// Draw the bar graph within the panel
+	barWidth := 30
+	barMaxHeight := panelHeight - 100
+	graphOffsetX := panelOffsetX + 50
+	graphOffsetY := 50
+
+	// Normalize the heights of the bars
+	totalCreatures := g.fishesCount + g.sharksCount
+	if totalCreatures == 0 {
+		totalCreatures = 1 // Prevent division by zero
+	}
+
+	// Calculate the heights of the bars
+	fishBarHeight := int(float64(g.fishesCount) / float64(totalCreatures) * float64(barMaxHeight))
+	sharkBarHeight := int(float64(g.sharksCount) / float64(totalCreatures) * float64(barMaxHeight))
+
+	// Draw the bars
+	ebitenutil.DrawRect(screen, float64(graphOffsetX), float64(graphOffsetY+barMaxHeight-fishBarHeight), float64(barWidth), float64(fishBarHeight), fishColor)
+	ebitenutil.DrawRect(screen, float64(graphOffsetX+barWidth+10), float64(graphOffsetY+barMaxHeight-sharkBarHeight), float64(barWidth), float64(sharkBarHeight), sharkColor)
+
+	// Add labels for the bars
+	ebitenutil.DebugPrintAt(screen, "Fish", graphOffsetX, graphOffsetY+barMaxHeight+10)
+	ebitenutil.DebugPrintAt(screen, "Sharks", graphOffsetX+barWidth+10, graphOffsetY+barMaxHeight+10)
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
@@ -288,7 +332,7 @@ func main() {
 		screenHeight: screenHeight,
 		fishesCount:  fishesCount,
 		sharksCount:  sharksCount,
-		fbreed:       100,
+		fbreed:       150,
 		sBreed:       150,
 		starve:       150,
 		routines:     routines,
